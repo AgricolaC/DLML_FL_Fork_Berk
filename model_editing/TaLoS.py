@@ -1,31 +1,32 @@
 import torch
 
 
-def compute_fisher_scores(model, dataloader, criterion, device):
+def compute_fisher_scores(model, dataloader, criterion, device, num_samples=5):
     """
     Compute Fisher Information matrix diagonal elements (sensitivity scores).
     """
     model.eval()
-    fisher_scores = {name: torch.zeros_like(param) for name, param in model.named_parameters() if param.requires_grad}
+    fisher_scores = {name: torch.zeros_like(param, device='cpu') 
+                    for name, param in model.named_parameters() if param.requires_grad}
 
     for inputs, labels in dataloader:
         inputs, labels = inputs.to(device), labels.to(device)
-        model.zero_grad()
+        
+        with torch.no_grad():
+            logits = model(inputs)
+            dist = torch.distributions.Categorical(logits=logits)
+        
+        for _ in range(num_samples):
+            model.zero_grad()
+            samples = dist.sample()
+            loss = criterion(logits, samples)
+            loss.backward()
 
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
-        loss.backward()
-
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                fisher_scores[name] += param.grad ** 2
-
-    # Normalize scores
-    for name in fisher_scores:
-        fisher_scores[name] /= len(dataloader)
+            for name, param in model.named_parameters():
+                if param.requires_grad and param.grad is not None:
+                    fisher_scores[name] += (param.grad.detach().cpu() ** 2) / len(dataloader)
 
     return fisher_scores
-
 
 def calibrate_mask(model, fisher_scores, target_sparsity, rounds):
     """
