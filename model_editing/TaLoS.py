@@ -28,24 +28,39 @@ def compute_fisher_scores(model, dataloader, criterion, device, num_samples=5):
 
     return fisher_scores
 
-def calibrate_mask(model, fisher_scores, target_sparsity, rounds):
+def calibrate_mask(model, fisher_scores, target_sparsity, rounds=4):
     """
-    Iteratively calibrate masks based on Fisher scores to reach target sparsity.
+    Gradual mask calibration with layer-wise consideration
     """
-    masks = {name: torch.ones_like(param) for name, param in model.named_parameters() if param.requires_grad}
-    total_params = sum(param.numel() for param in model.parameters() if param.requires_grad)
-    target_params = int(total_params * (1 - target_sparsity))       # params to be kept
+    device = next(model.parameters()).device
+    params = [p for p in model.parameters() if p.requires_grad]
+    
+    # Initialize masks and scores
+    masks = {n: torch.ones_like(p, device='cpu') 
+            for n, p in model.named_parameters() if p.requires_grad}
+    all_scores = torch.cat([v.flatten().cpu() for v in fisher_scores.values()])
 
-    for _ in range(rounds):
-        # Flatten scores and masks
-        all_scores = torch.cat([fisher_scores[name][masks[name] > 0].flatten() for name in fisher_scores])
-        threshold = torch.topk(all_scores, target_params, largest=False).values[-1]
+    for round in range(rounds):
+        # Calculate current sparsity level
+        current_sparsity = target_sparsity ** ((round + 1) / rounds)
+        
+        # Find global threshold
+        k = int(current_sparsity * all_scores.numel())
+        threshold = torch.kthvalue(all_scores, k).values.item()
 
         # Update masks
-        for name in masks:
-            masks[name] = (fisher_scores[name] <= threshold).float()
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+                
+            score = fisher_scores[name].to(device)
+            mask = (score > threshold).float().cpu()
+            masks[name] = mask * masks[name]  # Preserve previous masking
+            
+            # Freeze parameters below threshold
+            param.requires_grad = (mask.sum() > 0).item()
 
-        # Update target params for next round
-        target_params = int(target_params * (1 - target_sparsity / rounds))
+        # Remove masked parameters from future consideration
+        all_scores = all_scores[all_scores > threshold]
 
-    return masks
+    return {n: m.to(device) for n, m in masks.items()}
