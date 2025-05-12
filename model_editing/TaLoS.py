@@ -27,7 +27,7 @@ def compute_fisher_scores(model, dataloader, criterion, device):
     return fisher_scores
 
 
-def calibrate_mask(model, fisher_scores, target_sparsity, rounds):
+def calibrate_mask(model, fisher_scores, target_sparsity, rounds, dynamic_sparsity=False, layer_wise=False, logger=None):
     """
     Iteratively calibrate masks based on Fisher scores to reach target sparsity.
     """
