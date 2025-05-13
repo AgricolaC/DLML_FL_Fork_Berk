@@ -68,7 +68,7 @@ def calibrate_mask(model, fisher_scores, target_sparsity, rounds, dynamic_sparsi
     
     # layer-wise sparsity initialization
     if layer_wise and isinstance(target_sparsity, dict):
-        layer_target_params = {name: int(param.numel() * (1 - target_sparsity.get(name, 0))) for name, param in model.named_parameters() if param.requires_grad}}
+        layer_target_params = {name: int(param.numel() * (1 - target_sparsity.get(name, 0))) for name, param in model.named_parameters() if param.requires_grad}
     else:
         layer_target_params = None
         target_params = int(total_params * (1 - target_sparsity))      
@@ -82,8 +82,11 @@ def calibrate_mask(model, fisher_scores, target_sparsity, rounds, dynamic_sparsi
             thresholds = {}
             for name,param in fisher_scores.items():
                 if name in masks: 
-                    flattened_scores = params[masks[name]>0].flatten()
-                    layer_threshold = torch.topk(flattened_scores, layer_target_params[name], largest=False).values[-1]
+                    flattened_scores = param[masks[name]>0].flatten()
+                    if flattened_scores.numel() > 0:
+                        layer_threshold = torch.topk(flattened_scores, layer_target_params[name], largest=False).values[-1]
+                    else:
+                        layer_threshold = float('inf') # No masking for empty layers
                     thresholds[name] = layer_threshold
         else:
             # Apply checkpointing for global scores
@@ -104,7 +107,7 @@ def calibrate_mask(model, fisher_scores, target_sparsity, rounds, dynamic_sparsi
                 masks[name] = (fisher_scores[name] >= threshold).float()
 
          # Dynamic sparsity adjustments
-        if dynamic_sparsity and round_idx < rounds - 1:
+        if dynamic_sparsity and _ < rounds - 1:
             if layer_wise and layer_target_params:
                 for name in layer_target_params:
                     layer_target_params[name] = int(layer_target_params[name] * (1 - target_sparsity / rounds))
