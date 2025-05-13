@@ -66,9 +66,12 @@ def calibrate_mask(model, fisher_scores, target_sparsity, rounds, dynamic_sparsi
     masks = {name: torch.ones_like(param) for name, param in model.named_parameters() if param.requires_grad}
     total_params = sum(param.numel() for param in model.parameters() if param.requires_grad)
     
-    # layer-wise sparsity initialization
-    if layer_wise and isinstance(target_sparsity, dict):
-        layer_target_params = {name: int(param.numel() * (1 - target_sparsity.get(name, 0))) for name, param in model.named_parameters() if param.requires_grad}
+    
+    
+    if layer_wise:
+        total_fisher_score = sum(fisher_scores[name].sum().item() for name in fisher_scores)
+        layer_target_sparsity = {name: (1 - fisher_scores[name].sum().item() / total_fisher_score) * target_sparsity for name in fisher_scores}
+        layer_target_params = {name: int(param.numel() * (1 - layer_target_sparsity[name])) for name, param in model.named_parameters() if param.requires_grad}
     else:
         layer_target_params = None
         target_params = int(total_params * (1 - target_sparsity))      
@@ -84,10 +87,9 @@ def calibrate_mask(model, fisher_scores, target_sparsity, rounds, dynamic_sparsi
                 if name in masks: 
                     flattened_scores = param[masks[name]>0].flatten()
                     if flattened_scores.numel() > 0:
-                        layer_threshold = torch.topk(flattened_scores, layer_target_params[name], largest=False).values[-1]
+                        thresholds[name] = torch.topk(flattened_scores, layer_target_params[name], largest=False).values[-1]
                     else:
-                        layer_threshold = float('inf') # No masking for empty layers
-                    thresholds[name] = layer_threshold
+                        thresholds[name] = float('inf') # No masking for empty layers
         else:
             # Apply checkpointing for global scores
             def compute_global_scores():
