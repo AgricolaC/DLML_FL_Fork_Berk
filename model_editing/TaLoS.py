@@ -1,4 +1,5 @@
 import torch
+from torch.utils.checkpoint import checkpoint
 
 
 def compute_fisher_scores(model, dataloader, criterion, device):
@@ -27,9 +28,22 @@ def compute_fisher_scores(model, dataloader, criterion, device):
     return fisher_scores
 
 
-def calibrate_mask(model, fisher_scores, target_sparsity, rounds, dynamic_sparsity=False, layer_wise=False, logger=None):
+def calibrate_mask(model, fisher_scores, target_sparsity, rounds, dynamic_sparsity=False, layer_wise=False, logger=None, use_checkpointing=False):
     """
     Iteratively calibrate masks based on Fisher scores to reach target sparsity.
+
+     Args:
+        model: The model whose parameters are being pruned.
+        fisher_scores: Dictionary of Fisher scores for each layer.
+        target_sparsity: Global or layer-wise sparsity target (float or dict).
+        rounds: Number of calibration rounds.
+        dynamic_sparsity: Adjust sparsity dynamically over rounds.
+        layer_wise: Enable layer-wise sparsity targets.
+        logger: Logger for monitoring progress.
+        use_checkpointing: Enable gradient checkpointing for memory efficiency.
+
+    Returns:
+        masks: Dictionary of masks for each layer.
     """
     masks = {name: torch.ones_like(param) for name, param in model.named_parameters() if param.requires_grad}
     total_params = sum(param.numel() for param in model.parameters() if param.requires_grad)
@@ -54,7 +68,14 @@ def calibrate_mask(model, fisher_scores, target_sparsity, rounds, dynamic_sparsi
                     layer_threshold = torch.topk(flattened_scores, layer_target_params[name], largest=False).values[-1]
                     thresholds[name] = layer_threshold
         else:
-            all_scores = torch.cat([fisher_scores[name][masks[name] > 0].flatten() for name in fisher_scores])
+            # Apply checkpointing for global scores
+            def compute_global_scores():
+                return torch.cat([fisher_scores[name][masks[name] > 0].flatten() for name in fisher_scores])
+            if use_checkpointing:
+                all_scores = checkpoint(compute_global_scores)
+            else:
+                all_scores = compute_global_scores()
+                
             threshold = torch.topk(all_scores, target_params, largest=False).values[-1]
 
         # Update masks
