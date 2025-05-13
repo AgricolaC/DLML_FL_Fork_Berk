@@ -1,25 +1,43 @@
 import torch
 from torch.utils.checkpoint import checkpoint
+from torch.cuda.amp import autocast, GradScaler
 
 
 def compute_fisher_scores(model, dataloader, criterion, device):
     """
     Compute Fisher Information matrix diagonal elements (sensitivity scores).
+    
+    Args:
+        model: The neural network model.
+        dataloader: DataLoader for the dataset.
+        criterion: Loss function.
+        device: Device to run the computation (e.g., "cuda" or "cpu").
+        mixed_precision: Enable mixed precision for memory and speed optimization.
+
+    Returns:
+        fisher_scores: Dictionary containing Fisher scores for each parameter.
     """
     model.eval()
     fisher_scores = {name: torch.zeros_like(param) for name, param in model.named_parameters() if param.requires_grad}
 
+    # GradScaler for mixed precision
+    scaler = GradScaler() if mixed_precision else nONE
+    
     for inputs, labels in dataloader:
         inputs, labels = inputs.to(device), labels.to(device)
         model.zero_grad()
 
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
-        loss.backward()
+        with autocast(enables=mixed_precision):
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+        if mixed_precision:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
 
         for name, param in model.named_parameters():
-            if param.requires_grad:
-                fisher_scores[name] += param.grad ** 2
+            if param.requires_grad and param.grad is not None:
+                fisher_scores[name] += param.grad.detach() ** 2
 
     # Normalize scores
     for name in fisher_scores:
